@@ -42,7 +42,6 @@ const logHtml = function (cssClass: string, ...args: string[]): void {
 };
 
 const log = (...args: string[]): void => logHtml('', ...args);
-// const warn = (...args: string[]): void => logHtml('warning', ...args);
 const error = (...args: string[]): void => logHtml('error', ...args);
 
 const start = function (sqlite3: SQLite3): void {
