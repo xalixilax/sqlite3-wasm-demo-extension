@@ -1,0 +1,21 @@
+{
+  "name": "sqlite3-wasm-demo-extension",
+  "version": "1.0.0",
+  "description": "This repository takes the sample code from https://github.com/tomayac/sqlite3-wasm-demo/tree/main/public and converts it to run in an MV3 Chrome extension.",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc && npm run copy-assets && npm run strip-exports",
+    "copy-assets": "cp index.html manifest.json dist/ && cp -r jswasm dist/",
+    "strip-exports": "find dist -name '*.js' -type f -print0 | xargs -0 sed -i '/^export {};$/d'",
+    "clean": "rm -rf dist",
+    "watch": "tsc --watch",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/chrome": "^0.1.32",
+    "typescript": "^5.9.3"
+  }
+}
