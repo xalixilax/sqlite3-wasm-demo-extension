@@ -66,8 +66,20 @@ function App() {
       }
     };
 
+    // Load initial data from database
+    // Wait a bit for the worker to initialize
+    const loadDataTimer = setTimeout(() => {
+      worker.postMessage({ type: "getUsers" });
+    }, 1500); // Increased to give OPFS time to initialize
+
     return () => {
-      worker.terminate();
+      clearTimeout(loadDataTimer);
+      // Close database before terminating worker
+      worker.postMessage({ type: "closeDb" });
+      // Give it time to close gracefully
+      setTimeout(() => {
+        worker.terminate();
+      }, 100);
     };
   }, []);
 

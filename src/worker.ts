@@ -65,6 +65,10 @@ interface GetUsersMessage {
   type: 'getUsers';
 }
 
+interface CloseDbMessage {
+  type: 'closeDb';
+}
+
 interface QueryResultMessage {
   type: 'queryResult';
   payload: {
@@ -77,7 +81,7 @@ interface QueryResultMessage {
   };
 }
 
-type WorkerMessage = AddUserMessage | DeleteUserMessage | UpdateUserMessage | GetUsersMessage;
+type WorkerMessage = AddUserMessage | DeleteUserMessage | UpdateUserMessage | GetUsersMessage | CloseDbMessage;
 
 const logHtml = function (cssClass: string, ...args: string[]): void {
   postMessage({
@@ -91,48 +95,110 @@ const error = (...args: string[]): void => logHtml('error', ...args);
 
 // Global database instance
 let db: Database | null = null;
+let sqlite3Instance: SQLite3 | null = null;
+let isInitialized = false;
+
+// Cleanup function
+const cleanup = (): void => {
+  if (db) {
+    try {
+      log('Closing database connection...');
+      db.close();
+      db = null;
+      isInitialized = false;
+    } catch (e) {
+      error('Error during cleanup:', (e as Error).message);
+    }
+  }
+};
+
+// Listen for worker termination
+self.addEventListener('beforeunload', cleanup);
+self.addEventListener('unload', cleanup);
 
 // Initialize database
 const initDatabase = function (sqlite3: SQLite3): void {
+  // Prevent re-initialization
+  if (isInitialized && db) {
+    log('Database already initialized, skipping...');
+    return;
+  }
+  
   const capi = sqlite3.capi;
-  const oo = sqlite3.oo1;
+  
+  // Store sqlite3 instance globally
+  sqlite3Instance = sqlite3;
+  
   log('sqlite3 version', capi.sqlite3_libversion(), capi.sqlite3_sourceid());
   
-  if (sqlite3.opfs) {
-    db = new sqlite3.opfs.OpfsDb('/mydb.sqlite3');
-    log('The OPFS is available.');
-  } else {
-    db = new oo.DB('/mydb.sqlite3', 'ct');
-    log('The OPFS is not available.');
-  }
-  log('Database opened:', db.filename);
-
-  try {
-    log('--- Setting up database schema ---');
-    db.exec('DROP TABLE IF EXISTS users');
-    log('Dropped old users table if it existed');
-    
-    db.exec('CREATE TABLE users(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT, age INTEGER)');
-    log('Table "users" created successfully');
-    
-    // Add sample data
-    log('--- Adding sample users ---');
-    const sampleUsers = [
-      ['Alice', 'alice@example.com', 30],
-      ['Bob', 'bob@example.com', 25],
-    ];
-    
-    for (const user of sampleUsers) {
-      db.exec({
-        sql: 'INSERT INTO users(name, email, age) VALUES (?, ?, ?)',
-        bind: user,
-      });
+  // Close any existing database connection first
+  if (db) {
+    try {
+      log('Closing existing database connection...');
+      db.close();
+      db = null;
+      isInitialized = false;
+    } catch (e) {
+      error('Error closing existing database:', (e as Error).message);
     }
-    log(`Added ${sampleUsers.length} sample users`);
+  }
+  
+  try {
+    // OPFS only - no fallbacks to ensure persistence
+    if (!sqlite3.opfs) {
+      throw new Error('OPFS is not available - persistent storage required');
+    }
+    
+    log('Attempting to open OPFS database...');
+    db = new sqlite3.opfs.OpfsDb('/mydb.sqlite3');
+    log('✓ Using OPFS (persistent storage)');
+    isInitialized = true;
+    
+    if (!db) {
+      throw new Error('Failed to create database with any method');
+    }
+    
+    log('Database opened:', db.filename);
+
+    // Create table only if it doesn't exist (preserves existing data)
+    db.exec('CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT, age INTEGER)');
+    log('Table "users" ready');
+    
+    // Check if table is empty
+    let userCount = 0;
+    db.exec({
+      sql: 'SELECT COUNT(*) as count FROM users',
+      rowMode: 'object',
+      callback: function (row: unknown): void {
+        const result = row as { count: number };
+        userCount = result.count;
+      },
+    });
+    
+    // Only add sample data if table is empty
+    if (userCount === 0) {
+      log('--- Table is empty, adding sample users ---');
+      const sampleUsers = [
+        ['Alice', 'alice@example.com', 30],
+        ['Bob', 'bob@example.com', 25],
+      ];
+      
+      for (const user of sampleUsers) {
+        db.exec({
+          sql: 'INSERT INTO users(name, email, age) VALUES (?, ?, ?)',
+          bind: user,
+        });
+      }
+      log(`Added ${sampleUsers.length} sample users`);
+    } else {
+      log(`--- Table already has ${userCount} user(s), skipping sample data ---`);
+    }
+    
     log('--- Database ready! Waiting for commands from App ---');
     
   } catch (e) {
     error('Error initializing database:', (e as Error).message);
+    db = null;
   }
 };
 
@@ -261,6 +327,9 @@ self.addEventListener('message', (event: MessageEvent) => {
       break;
     case 'getUsers':
       getUsers();
+      break;
+    case 'closeDb':
+      cleanup();
       break;
     default:
       error('Unknown message type');
