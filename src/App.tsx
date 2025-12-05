@@ -225,7 +225,9 @@ function App() {
                 <th style={{ padding: "8px", border: "1px solid #ddd" }}>
                   Email
                 </th>
-                <th style={{ padding: "8px", border: "1px solid #ddd" }}>Age</th>
+                <th style={{ padding: "8px", border: "1px solid #ddd" }}>
+                  Age
+                </th>
                 <th style={{ padding: "8px", border: "1px solid #ddd" }}>
                   Actions
                 </th>
