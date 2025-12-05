@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc && npm run copy-assets && npm run strip-exports",
     "copy-assets": "cp index.html manifest.json dist/ && cp -r jswasm dist/",
-    "strip-exports": "find dist -name '*.js' -type f -print0 | xargs -0 sed -i '/^export {};$/d'",
+    "strip-exports": "node strip-exports.js",
     "clean": "rm -rf dist",
     "watch": "tsc --watch",
     "test": "echo \"Error: no test specified\" && exit 1"

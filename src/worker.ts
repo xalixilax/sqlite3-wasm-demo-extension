@@ -71,12 +71,13 @@ const start = function (sqlite3: SQLite3): void {
       });
     }
     log("Query data with exec() using rowMode 'array'...");
+    let counter = 0;
     db.exec({
       sql: 'select a from t order by a limit 3',
       rowMode: 'array', // 'array' (default), 'object', or 'stmt'
-      callback: function (this: { counter: number }, row: unknown): void {
-        log('row ', String(++this.counter), '=', String(row));
-      }.bind({ counter: 0 }),
+      callback: function (row: unknown): void {
+        log('row ', String(++counter), '=', String(row));
+      },
     });
   } finally {
     db.close();
