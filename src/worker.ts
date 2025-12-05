@@ -110,5 +110,3 @@ sqlite3InitModule({
       error('Exception:', (e as Error).message);
     }
   });
-
-export {};
