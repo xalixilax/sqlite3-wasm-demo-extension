@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { type User, users } from "../db/schema";
-import { createRouter, mutation, query } from "./router";
+import { createRouter, mutation, query } from "../lib/router";
 
 // Input schemas
 const addUserSchema = z.object({

@@ -1,20 +1,15 @@
-import { PGlite } from "@electric-sql/pglite";
-import { OpfsAhpFS } from "@electric-sql/pglite/opfs-ahp";
-import { drizzle } from "drizzle-orm/pglite";
 import { users } from "./db/schema";
 import { createWorkerHandler, type WorkerRequest } from "./lib/router";
-import { createAppRouter } from "./lib/workerRoutes";
+import { createAppRouter } from "./routers/userRouters";
 import { error, log } from "./lib/workerUtils";
+import { db, initDb } from "./db/user";
 
 let isDbReady = false;
 let handleRequest: ReturnType<typeof createWorkerHandler> | null = null;
+const requestQueue: WorkerRequest[] = [];
 
 (async () => {
-	const fs = new OpfsAhpFS("my-pgdata");
-	const client = new PGlite({ fs });
-	await client.waitReady;
-
-	const db = drizzle(client, { schema: { users } });
+	await initDb();
 	const router = createAppRouter({ db, log, error });
 	handleRequest = createWorkerHandler(router);
 
@@ -38,6 +33,15 @@ let handleRequest: ReturnType<typeof createWorkerHandler> | null = null;
 
 	isDbReady = true;
 	log("Database ready");
+
+	// Process queued requests
+	while (requestQueue.length > 0) {
+		const queuedRequest = requestQueue.shift();
+		if (queuedRequest) {
+			const response = await handleRequest(queuedRequest);
+			postMessage(response);
+		}
+	}
 })().catch((err) => error("Init failed:", err.message));
 
 self.addEventListener("message", async (event: MessageEvent) => {
@@ -46,11 +50,8 @@ self.addEventListener("message", async (event: MessageEvent) => {
 	const request = event.data as WorkerRequest;
 
 	if (!isDbReady || !handleRequest) {
-		postMessage({
-			id: request.id,
-			success: false,
-			error: "Database not ready",
-		});
+		requestQueue.push(request);
+		log(`Request queued: ${request.route}`);
 		return;
 	}
 
