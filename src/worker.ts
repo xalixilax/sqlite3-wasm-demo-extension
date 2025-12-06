@@ -1,87 +1,6 @@
-console.log('Running demo from Worker thread.');
-
-// Type definitions for SQLite3 WASM API
-interface SQLite3 {
-  capi: {
-    sqlite3_libversion: () => string;
-    sqlite3_sourceid: () => string;
-  };
-  oo1: {
-    DB: new (filename: string, flags?: string) => Database;
-  };
-  opfs?: {
-    OpfsDb: new (filename: string) => Database;
-  };
-}
-
-interface Database {
-  filename: string;
-  exec(sql: string): void;
-  exec(config: {
-    sql: string;
-    bind?: unknown[];
-    rowMode?: 'array' | 'object' | 'stmt';
-    callback?: (row: unknown) => void;
-  }): void;
-  close(): void;
-}
-
-// Message types
-interface LogMessage {
-  type: 'log';
-  payload: {
-    cssClass: string;
-    args: string[];
-  };
-}
-
-interface AddUserMessage {
-  type: 'addUser';
-  payload: {
-    name: string;
-    email: string;
-    age: number;
-  };
-}
-
-interface DeleteUserMessage {
-  type: 'deleteUser';
-  payload: {
-    id: number;
-  };
-}
-
-interface UpdateUserMessage {
-  type: 'updateUser';
-  payload: {
-    id: number;
-    name?: string;
-    email?: string;
-    age?: number;
-  };
-}
-
-interface GetUsersMessage {
-  type: 'getUsers';
-}
-
-interface CloseDbMessage {
-  type: 'closeDb';
-}
-
-interface QueryResultMessage {
-  type: 'queryResult';
-  payload: {
-    users: Array<{
-      id: number;
-      name: string;
-      email: string;
-      age: number;
-    }>;
-  };
-}
-
-type WorkerMessage = AddUserMessage | DeleteUserMessage | UpdateUserMessage | GetUsersMessage | CloseDbMessage;
+// worker.ts
+import { PGlite } from "@electric-sql/pglite";
+import { OpfsAhpFS } from "@electric-sql/pglite/opfs-ahp";
 
 const logHtml = function (cssClass: string, ...args: string[]): void {
   postMessage({
@@ -93,153 +12,58 @@ const logHtml = function (cssClass: string, ...args: string[]): void {
 const log = (...args: string[]): void => logHtml('', ...args);
 const error = (...args: string[]): void => logHtml('error', ...args);
 
-// Global database instance
-let db: Database | null = null;
-let sqlite3Instance: SQLite3 | null = null;
-let isInitialized = false;
+let db: PGlite | null = null;
 
-// Cleanup function
-const cleanup = (): void => {
-  if (db) {
-    try {
-      log('Closing database connection...');
-      db.close();
-      db = null;
-      isInitialized = false;
-    } catch (e) {
-      error('Error during cleanup:', (e as Error).message);
-    }
-  }
-};
+async function initDb() {
+  // Provide an OPFS-based directory for persistence
+  const fs = new OpfsAhpFS("my-pgdata");  // directory inside OPFS
+  db = new PGlite({ fs });
 
-// Listen for worker termination
-self.addEventListener('beforeunload', cleanup);
-self.addEventListener('unload', cleanup);
+  log("Initializing database...");
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      name TEXT,
+      email TEXT,
+      age INT
+    );
+  `);
 
-// Initialize database
-const initDatabase = function (sqlite3: SQLite3): void {
-  // Prevent re-initialization
-  if (isInitialized && db) {
-    log('Database already initialized, skipping...');
-    return;
-  }
-  
-  const capi = sqlite3.capi;
-  
-  // Store sqlite3 instance globally
-  sqlite3Instance = sqlite3;
-  
-  log('sqlite3 version', capi.sqlite3_libversion(), capi.sqlite3_sourceid());
-  
-  // Close any existing database connection first
-  if (db) {
-    try {
-      log('Closing existing database connection...');
-      db.close();
-      db = null;
-      isInitialized = false;
-    } catch (e) {
-      error('Error closing existing database:', (e as Error).message);
-    }
-  }
-  
-  try {
-    // OPFS only - no fallbacks to ensure persistence
-    if (!sqlite3.opfs) {
-      throw new Error('OPFS is not available - persistent storage required');
-    }
-    
-    log('Attempting to open OPFS database...');
-    db = new sqlite3.opfs.OpfsDb('/mydb.sqlite3');
-    log('✓ Using OPFS (persistent storage)');
-    isInitialized = true;
-    
-    if (!db) {
-      throw new Error('Failed to create database with any method');
-    }
-    
-    log('Database opened:', db.filename);
-
-    // Create table only if it doesn't exist (preserves existing data)
-    db.exec('CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT, age INTEGER)');
-    log('Table "users" ready');
-    
-    // Check if table is empty
-    let userCount = 0;
-    db.exec({
-      sql: 'SELECT COUNT(*) as count FROM users',
-      rowMode: 'object',
-      callback: function (row: unknown): void {
-        const result = row as { count: number };
-        userCount = result.count;
-      },
-    });
-    
-    // Only add sample data if table is empty
-    if (userCount === 0) {
-      log('--- Table is empty, adding sample users ---');
-      const sampleUsers = [
-        ['Alice', 'alice@example.com', 30],
-        ['Bob', 'bob@example.com', 25],
-      ];
-      
-      for (const user of sampleUsers) {
-        db.exec({
-          sql: 'INSERT INTO users(name, email, age) VALUES (?, ?, ?)',
-          bind: user,
-        });
-      }
-      log(`Added ${sampleUsers.length} sample users`);
-    } else {
-      log(`--- Table already has ${userCount} user(s), skipping sample data ---`);
-    }
-    
-    log('--- Database ready! Waiting for commands from App ---');
-    
-  } catch (e) {
-    error('Error initializing database:', (e as Error).message);
-    db = null;
-  }
-};
+  const { rows } = await db.query("SELECT * FROM users;");
+  // Send results back to main thread or do something with them
+  log("Users", JSON.stringify({ rows }));
+}
 
 // Database operation functions
-const addUser = (name: string, email: string, age: number): void => {
+const addUser = async (name: string, email: string, age: number): Promise<void> => {
   if (!db) {
     error('Database not initialized');
     return;
   }
   
   try {
-    db.exec({
-      sql: 'INSERT INTO users(name, email, age) VALUES (?, ?, ?)',
-      bind: [name, email, age],
-    });
+    await db.query('INSERT INTO users(name, email, age) VALUES ($1, $2, $3)', [name, email, age]);
     log(`Added user: ${name}`);
-    getUsers();
+    getUsers();   
   } catch (e) {
     error('Error adding user:', (e as Error).message);
   }
 };
-
-const deleteUser = (id: number): void => {
+const deleteUser = async (id: number): Promise<void> => {
   if (!db) {
     error('Database not initialized');
     return;
   }
   
   try {
-    db.exec({
-      sql: 'DELETE FROM users WHERE id = ?',
-      bind: [id],
-    });
+    await db.query('DELETE FROM users WHERE id = $1', [id]);
     log(`Deleted user with ID: ${id}`);
     getUsers();
   } catch (e) {
     error('Error deleting user:', (e as Error).message);
   }
 };
-
-const updateUser = (id: number, name?: string, email?: string, age?: number): void => {
+const updateUser = async (id: number, name?: string, email?: string, age?: number): Promise<void> => {
   if (!db) {
     error('Database not initialized');
     return;
@@ -248,17 +72,18 @@ const updateUser = (id: number, name?: string, email?: string, age?: number): vo
   try {
     const updates: string[] = [];
     const bindings: unknown[] = [];
+    let paramCount = 1;
     
     if (name !== undefined) {
-      updates.push('name = ?');
+      updates.push(`name = $${paramCount++}`);
       bindings.push(name);
     }
     if (email !== undefined) {
-      updates.push('email = ?');
+      updates.push(`email = $${paramCount++}`);
       bindings.push(email);
     }
     if (age !== undefined) {
-      updates.push('age = ?');
+      updates.push(`age = $${paramCount++}`);
       bindings.push(age);
     }
     
@@ -269,34 +94,22 @@ const updateUser = (id: number, name?: string, email?: string, age?: number): vo
     
     bindings.push(id);
     
-    db.exec({
-      sql: `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
-      bind: bindings,
-    });
+    await db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount}`, bindings);
     log(`Updated user with ID: ${id}`);
     getUsers();
   } catch (e) {
     error('Error updating user:', (e as Error).message);
   }
 };
-
-const getUsers = (): void => {
+const getUsers = async (): Promise<void> => {
   if (!db) {
     error('Database not initialized');
     return;
   }
   
   try {
-    const users: Array<{ id: number; name: string; email: string; age: number }> = [];
-    
-    db.exec({
-      sql: 'SELECT * FROM users ORDER BY id',
-      rowMode: 'object',
-      callback: function (row: unknown): void {
-        const user = row as { id: number; name: string; email: string; age: number };
-        users.push(user);
-      },
-    });
+    const result = await db.query('SELECT * FROM users ORDER BY id');
+    const users = result.rows as Array<{ id: number; name: string; email: string; age: number }>;
     
     postMessage({
       type: 'queryResult',
@@ -308,6 +121,22 @@ const getUsers = (): void => {
     error('Error getting users:', (e as Error).message);
   }
 };
+
+const cleanup = async (): Promise<void> => {
+  if (db) {
+    try {
+      await db.close();
+      log('Database closed successfully');
+      db = null;
+    } catch (e) {
+      error('Error closing database:', (e as Error).message);
+    }
+  }
+};
+
+initDb().catch(err => {
+  error("Error initialising DB",err.message);
+});
 
 // Handle messages from the App
 self.addEventListener('message', (event: MessageEvent) => {
@@ -336,30 +165,4 @@ self.addEventListener('message', (event: MessageEvent) => {
   }
 });
 
-log('Loading and initializing sqlite3 module...');
-
-let sqlite3Js = 'sqlite3.js';
-const urlParams = new URL(self.location.href).searchParams;
-if (urlParams.has('sqlite3.dir')) {
-  sqlite3Js = urlParams.get('sqlite3.dir') + '/' + sqlite3Js;
-}
-importScripts(sqlite3Js);
-
-declare const sqlite3InitModule: (config: {
-  print: (...args: string[]) => void;
-  printErr: (...args: string[]) => void;
-}) => Promise<SQLite3>;
-
-sqlite3InitModule({
-  print: log,
-  printErr: error,
-})
-  .then(function (sqlite3: SQLite3): void {
-    log('Done initializing. Running demo...');
-    try {
-      initDatabase(sqlite3);
-    } catch (e) {
-      error('Exception:', (e as Error).message);
-    }
-  });
-
+log('Loading and initializing PGLite module...');

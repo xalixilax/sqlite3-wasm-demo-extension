@@ -38,7 +38,7 @@ function App() {
   const workerRef = useRef<Worker | null>(null);
 
   useEffect(() => {
-    const worker = new Worker("/worker.js?sqlite3.dir=jswasm");
+    const worker = new Worker("/worker.js", { type: "module" });
     workerRef.current = worker;
 
     worker.onmessage = ({ data }: MessageEvent<WorkerResponse>) => {
