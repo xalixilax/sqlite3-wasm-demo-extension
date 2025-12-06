@@ -104,6 +104,21 @@ function App() {
     setNewAge("");
   };
 
+  function useWorker<T extends WorkerResponse>(worker: Worker, type: T["type"], handler: (payload: T["payload"]) => void) {
+    useEffect(() => {
+      const messageHandler = (event: MessageEvent<WorkerResponse>) => {
+        const data = event.data;
+        if (data.type === type) {
+          handler((data as T).payload);
+        }
+      };
+      worker.addEventListener("message", messageHandler);
+      return () => {
+        worker.removeEventListener("message", messageHandler);
+      };
+    }, [worker, type, handler]);
+  }
+
   const handleDeleteUser = (id: number) => {
     workerRef.current?.postMessage({
       type: "deleteUser",

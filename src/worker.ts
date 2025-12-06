@@ -1,6 +1,66 @@
 // worker.ts
 import { PGlite } from "@electric-sql/pglite";
 import { OpfsAhpFS } from "@electric-sql/pglite/opfs-ahp";
+import { drizzle } from 'drizzle-orm/pglite';
+import { eq } from 'drizzle-orm';
+import { users } from './db/schema';
+
+// Message types
+interface LogMessage {
+  type: 'log';
+  payload: {
+    cssClass: string;
+    args: string[];
+  };
+}
+
+interface AddUserMessage {
+  type: 'addUser';
+  payload: {
+    name: string;
+    email: string;
+    age: number;
+  };
+}
+
+interface DeleteUserMessage {
+  type: 'deleteUser';
+  payload: {
+    id: number;
+  };
+}
+
+interface UpdateUserMessage {
+  type: 'updateUser';
+  payload: {
+    id: number;
+    name?: string;
+    email?: string;
+    age?: number;
+  };
+}
+
+interface GetUsersMessage {
+  type: 'getUsers';
+}
+
+interface CloseDbMessage {
+  type: 'closeDb';
+}
+
+interface QueryResultMessage {
+  type: 'queryResult';
+  payload: {
+    users: Array<{
+      id: number;
+      name: string;
+      email: string;
+      age: number;
+    }>;
+  };
+}
+
+type WorkerMessage = AddUserMessage | DeleteUserMessage | UpdateUserMessage | GetUsersMessage | CloseDbMessage;
 
 const logHtml = function (cssClass: string, ...args: string[]): void {
   postMessage({
@@ -12,15 +72,14 @@ const logHtml = function (cssClass: string, ...args: string[]): void {
 const log = (...args: string[]): void => logHtml('', ...args);
 const error = (...args: string[]): void => logHtml('error', ...args);
 
-let db: PGlite | null = null;
+const fs = new OpfsAhpFS("my-pgdata");  // directory inside OPFS
+const client = new PGlite({ fs });
+const db = drizzle(client, { schema: { users } });
 
 async function initDb() {
   // Provide an OPFS-based directory for persistence
-  const fs = new OpfsAhpFS("my-pgdata");  // directory inside OPFS
-  db = new PGlite({ fs });
-
   log("Initializing database...");
-  await db.exec(`
+  await db.execute(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       name TEXT,
@@ -29,9 +88,9 @@ async function initDb() {
     );
   `);
 
-  const { rows } = await db.query("SELECT * FROM users;");
+  const allUsers = await db.select().from(users);
   // Send results back to main thread or do something with them
-  log("Users", JSON.stringify({ rows }));
+  log("Users", JSON.stringify(allUsers));
 }
 
 // Database operation functions
@@ -40,15 +99,16 @@ const addUser = async (name: string, email: string, age: number): Promise<void> 
     error('Database not initialized');
     return;
   }
-  
+
   try {
-    await db.query('INSERT INTO users(name, email, age) VALUES ($1, $2, $3)', [name, email, age]);
+    await db.insert(users).values({ name, email, age });
     log(`Added user: ${name}`);
     getUsers();   
   } catch (e) {
     error('Error adding user:', (e as Error).message);
   }
 };
+
 const deleteUser = async (id: number): Promise<void> => {
   if (!db) {
     error('Database not initialized');
@@ -56,13 +116,14 @@ const deleteUser = async (id: number): Promise<void> => {
   }
   
   try {
-    await db.query('DELETE FROM users WHERE id = $1', [id]);
+    await db.delete(users).where(eq(users.id, id));
     log(`Deleted user with ID: ${id}`);
     getUsers();
   } catch (e) {
     error('Error deleting user:', (e as Error).message);
   }
 };
+
 const updateUser = async (id: number, name?: string, email?: string, age?: number): Promise<void> => {
   if (!db) {
     error('Database not initialized');
@@ -70,31 +131,24 @@ const updateUser = async (id: number, name?: string, email?: string, age?: numbe
   }
   
   try {
-    const updates: string[] = [];
-    const bindings: unknown[] = [];
-    let paramCount = 1;
+    const updateData: Partial<{ name: string; email: string; age: number }> = {};
     
     if (name !== undefined) {
-      updates.push(`name = $${paramCount++}`);
-      bindings.push(name);
+      updateData.name = name;
     }
     if (email !== undefined) {
-      updates.push(`email = $${paramCount++}`);
-      bindings.push(email);
+      updateData.email = email;
     }
     if (age !== undefined) {
-      updates.push(`age = $${paramCount++}`);
-      bindings.push(age);
+      updateData.age = age;
     }
     
-    if (updates.length === 0) {
+    if (Object.keys(updateData).length === 0) {
       error('No fields to update');
       return;
     }
     
-    bindings.push(id);
-    
-    await db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount}`, bindings);
+    await db.update(users).set(updateData).where(eq(users.id, id));
     log(`Updated user with ID: ${id}`);
     getUsers();
   } catch (e) {
@@ -108,26 +162,24 @@ const getUsers = async (): Promise<void> => {
   }
   
   try {
-    const result = await db.query('SELECT * FROM users ORDER BY id');
-    const users = result.rows as Array<{ id: number; name: string; email: string; age: number }>;
+    const allUsers = await db.select().from(users).orderBy(users.id);
     
     postMessage({
       type: 'queryResult',
-      payload: { users },
+      payload: { users: allUsers },
     } as QueryResultMessage);
     
-    log(`Retrieved ${users.length} users`);
+    log(`Retrieved ${allUsers.length} users`);
   } catch (e) {
     error('Error getting users:', (e as Error).message);
   }
 };
 
 const cleanup = async (): Promise<void> => {
-  if (db) {
+  if (client) {
     try {
-      await db.close();
+      await client.close();
       log('Database closed successfully');
-      db = null;
     } catch (e) {
       error('Error closing database:', (e as Error).message);
     }
@@ -161,7 +213,8 @@ self.addEventListener('message', (event: MessageEvent) => {
       cleanup();
       break;
     default:
-      error('Unknown message type');
+      const exhaustiveCheck: never = message;
+      throw new Error(`Unhandled case: ${exhaustiveCheck}`);
   }
 });
 
