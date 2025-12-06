@@ -1,5 +1,3 @@
-"use strict";
-
-chrome.action.onClicked.addListener(function(): void {
-    chrome.tabs.create({url: chrome.runtime.getURL("index.html")});
+chrome.action.onClicked.addListener((): void => {
+	chrome.tabs.create({ url: chrome.runtime.getURL("index.html") });
 });

@@ -1,358 +1,291 @@
-import { useState, useEffect, useRef } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
+import {
+	useAddUser,
+	useDeleteUser,
+	useUpdateUser,
+	useUsers,
+} from "./lib/workerClient";
 
-interface LogEntry {
-  cssClass: string;
-  message: string;
+// Create a query client
+const queryClient = new QueryClient({
+	defaultOptions: {
+		queries: {
+			refetchOnWindowFocus: false,
+			staleTime: 5000,
+		},
+	},
+});
+
+function UserManager() {
+	const [newName, setNewName] = useState("");
+	const [newEmail, setNewEmail] = useState("");
+	const [newAge, setNewAge] = useState("");
+	const [validationError, setValidationError] = useState("");
+
+	const { data: users = [], isLoading, error, refetch } = useUsers();
+	const addUserMutation = useAddUser({
+		onError: (err) => setValidationError(err.message),
+	});
+	const updateUserMutation = useUpdateUser();
+	const deleteUserMutation = useDeleteUser();
+
+	const handleAddUser = async () => {
+		setValidationError("");
+
+		if (!newName || !newEmail || !newAge) {
+			setValidationError("Please fill in all fields");
+			return;
+		}
+
+		await addUserMutation.mutateAsync({
+			name: newName,
+			email: newEmail,
+			age: parseInt(newAge, 10),
+		});
+
+		setNewName("");
+		setNewEmail("");
+		setNewAge("");
+	};
+
+	const handleDeleteUser = (id: number) => {
+		deleteUserMutation.mutate({ id });
+	};
+
+	const handleUpdateUser = (id: number) => {
+		const name = prompt("Enter new name (leave empty to skip):");
+		const email = prompt("Enter new email (leave empty to skip):");
+		const ageStr = prompt("Enter new age (leave empty to skip):");
+
+		const updateData: {
+			id: number;
+			name?: string;
+			email?: string;
+			age?: number;
+		} = { id };
+		if (name) updateData.name = name;
+		if (email) updateData.email = email;
+		if (ageStr) updateData.age = parseInt(ageStr, 10);
+
+		updateUserMutation.mutate(updateData);
+	};
+
+	return (
+		<div
+			style={{
+				display: "flex",
+				flexDirection: "column",
+				fontFamily: "monospace",
+				padding: "20px",
+				gap: "20px",
+			}}
+		>
+			<h1>SQLite3 WASM Demo - Type-Safe Edition</h1>
+
+			{isLoading && (
+				<div style={{ padding: "10px", backgroundColor: "#e3f2fd" }}>
+					Loading users...
+				</div>
+			)}
+			{error && (
+				<div
+					style={{ padding: "10px", backgroundColor: "#ffebee", color: "red" }}
+				>
+					Error: {error.message}
+				</div>
+			)}
+			{validationError && (
+				<div
+					style={{
+						padding: "10px",
+						backgroundColor: "#fff3cd",
+						color: "#856404",
+						border: "1px solid #ffc107",
+						borderRadius: "4px",
+					}}
+				>
+					⚠️ {validationError}
+				</div>
+			)}
+
+			<div
+				style={{
+					border: "2px solid #333",
+					padding: "15px",
+					borderRadius: "5px",
+				}}
+			>
+				<h2>Add New User</h2>
+				<div style={{ display: "flex", gap: "10px", flexDirection: "column" }}>
+					<input
+						type="text"
+						placeholder="Name"
+						value={newName}
+						onChange={(e) => setNewName(e.target.value)}
+						style={{ padding: "5px", fontSize: "14px" }}
+					/>
+					<input
+						type="email"
+						placeholder="Email"
+						value={newEmail}
+						onChange={(e) => setNewEmail(e.target.value)}
+						style={{ padding: "5px", fontSize: "14px" }}
+					/>
+					<input
+						type="number"
+						placeholder="Age"
+						value={newAge}
+						onChange={(e) => setNewAge(e.target.value)}
+						style={{ padding: "5px", fontSize: "14px" }}
+					/>
+					<button
+						type="button"
+						onClick={handleAddUser}
+						disabled={addUserMutation.isPending}
+						style={{
+							padding: "10px",
+							backgroundColor: addUserMutation.isPending ? "#ccc" : "#4CAF50",
+							color: "white",
+							border: "none",
+							cursor: addUserMutation.isPending ? "not-allowed" : "pointer",
+							fontSize: "14px",
+						}}
+					>
+						{addUserMutation.isPending ? "Adding..." : "Add User"}
+					</button>
+				</div>
+			</div>
+
+			<div
+				style={{
+					border: "2px solid #333",
+					padding: "15px",
+					borderRadius: "5px",
+				}}
+			>
+				<div
+					style={{
+						display: "flex",
+						justifyContent: "space-between",
+						alignItems: "center",
+					}}
+				>
+					<h2>Users ({users.length})</h2>
+					<button
+						type="button"
+						onClick={() => refetch()}
+						style={{
+							padding: "5px 10px",
+							cursor: "pointer",
+						}}
+					>
+						Refresh
+					</button>
+				</div>
+				{users.length === 0 ? (
+					<p>No users found. Click refresh or add a new user.</p>
+				) : (
+					<table
+						style={{
+							width: "100%",
+							borderCollapse: "collapse",
+							marginTop: "10px",
+						}}
+					>
+						<thead>
+							<tr style={{ backgroundColor: "#f0f0f0" }}>
+								<th style={{ padding: "8px", border: "1px solid #ddd" }}>ID</th>
+								<th style={{ padding: "8px", border: "1px solid #ddd" }}>
+									Name
+								</th>
+								<th style={{ padding: "8px", border: "1px solid #ddd" }}>
+									Email
+								</th>
+								<th style={{ padding: "8px", border: "1px solid #ddd" }}>
+									Age
+								</th>
+								<th style={{ padding: "8px", border: "1px solid #ddd" }}>
+									Actions
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							{users.map((user) => (
+								<tr key={user.id}>
+									<td style={{ padding: "8px", border: "1px solid #ddd" }}>
+										{user.id}
+									</td>
+									<td style={{ padding: "8px", border: "1px solid #ddd" }}>
+										{user.name}
+									</td>
+									<td style={{ padding: "8px", border: "1px solid #ddd" }}>
+										{user.email}
+									</td>
+									<td style={{ padding: "8px", border: "1px solid #ddd" }}>
+										{user.age}
+									</td>
+									<td
+										style={{
+											padding: "8px",
+											border: "1px solid #ddd",
+											display: "flex",
+											gap: "5px",
+										}}
+									>
+										<button
+											type="button"
+											onClick={() => handleUpdateUser(user.id)}
+											disabled={updateUserMutation.isPending}
+											style={{
+												padding: "5px 10px",
+												backgroundColor: updateUserMutation.isPending
+													? "#ccc"
+													: "#2196F3",
+												color: "white",
+												border: "none",
+												cursor: updateUserMutation.isPending
+													? "not-allowed"
+													: "pointer",
+											}}
+										>
+											Edit
+										</button>
+										<button
+											type="button"
+											onClick={() => handleDeleteUser(user.id)}
+											disabled={deleteUserMutation.isPending}
+											style={{
+												padding: "5px 10px",
+												backgroundColor: deleteUserMutation.isPending
+													? "#ccc"
+													: "#f44336",
+												color: "white",
+												border: "none",
+												cursor: deleteUserMutation.isPending
+													? "not-allowed"
+													: "pointer",
+											}}
+										>
+											Delete
+										</button>
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				)}
+			</div>
+		</div>
+	);
 }
-
-interface User {
-  id: number;
-  name: string;
-  email: string;
-  age: number;
-}
-
-interface LogMessage {
-  type: "log";
-  payload: {
-    cssClass: string;
-    args: string[];
-  };
-}
-
-interface QueryResultMessage {
-  type: "queryResult";
-  payload: {
-    users: User[];
-  };
-}
-
-type WorkerResponse = LogMessage | QueryResultMessage;
 
 function App() {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
-  const [newName, setNewName] = useState("");
-  const [newEmail, setNewEmail] = useState("");
-  const [newAge, setNewAge] = useState("");
-  const workerRef = useRef<Worker | null>(null);
-
-  useEffect(() => {
-    const worker = new Worker("/worker.js", { type: "module" });
-    workerRef.current = worker;
-
-    worker.onmessage = ({ data }: MessageEvent<WorkerResponse>) => {
-      switch (data.type) {
-        case "log":
-          setLogs((prev) => [
-            ...prev,
-            {
-              cssClass: data.payload.cssClass,
-              message: data.payload.args.join(" "),
-            },
-          ]);
-          break;
-        case "queryResult":
-          setUsers(data.payload.users);
-          break;
-        default:
-          setLogs((prev) => [
-            ...prev,
-            {
-              cssClass: "error",
-              message: `Unhandled message: ${(data as { type: string }).type}`,
-            },
-          ]);
-      }
-    };
-
-    // Load initial data from database
-    // Wait a bit for the worker to initialize
-    const loadDataTimer = setTimeout(() => {
-      worker.postMessage({ type: "getUsers" });
-    }, 1500); // Increased to give OPFS time to initialize
-
-    return () => {
-      clearTimeout(loadDataTimer);
-      // Close database before terminating worker
-      worker.postMessage({ type: "closeDb" });
-      // Give it time to close gracefully
-      setTimeout(() => {
-        worker.terminate();
-      }, 100);
-    };
-  }, []);
-
-  const handleAddUser = () => {
-    if (!newName || !newEmail || !newAge) {
-      alert("Please fill in all fields");
-      return;
-    }
-
-    workerRef.current?.postMessage({
-      type: "addUser",
-      payload: {
-        name: newName,
-        email: newEmail,
-        age: parseInt(newAge, 10),
-      },
-    });
-
-    // Clear form
-    setNewName("");
-    setNewEmail("");
-    setNewAge("");
-  };
-
-  function useWorker<T extends WorkerResponse>(worker: Worker, type: T["type"], handler: (payload: T["payload"]) => void) {
-    useEffect(() => {
-      const messageHandler = (event: MessageEvent<WorkerResponse>) => {
-        const data = event.data;
-        if (data.type === type) {
-          handler((data as T).payload);
-        }
-      };
-      worker.addEventListener("message", messageHandler);
-      return () => {
-        worker.removeEventListener("message", messageHandler);
-      };
-    }, [worker, type, handler]);
-  }
-
-  const handleDeleteUser = (id: number) => {
-    workerRef.current?.postMessage({
-      type: "deleteUser",
-      payload: { id },
-    });
-  };
-
-  const handleUpdateUser = (id: number) => {
-    const name = prompt("Enter new name (leave empty to skip):");
-    const email = prompt("Enter new email (leave empty to skip):");
-    const ageStr = prompt("Enter new age (leave empty to skip):");
-
-    workerRef.current?.postMessage({
-      type: "updateUser",
-      payload: {
-        id,
-        ...(name && { name }),
-        ...(email && { email }),
-        ...(ageStr && { age: parseInt(ageStr, 10) }),
-      },
-    });
-  };
-
-  const handleRefresh = () => {
-    workerRef.current?.postMessage({
-      type: "getUsers",
-    });
-  };
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        fontFamily: "monospace",
-        padding: "20px",
-        gap: "20px",
-      }}
-    >
-      <h1>SQLite3 WASM Demo</h1>
-
-      {/* Add User Form */}
-      <div
-        style={{
-          border: "2px solid #333",
-          padding: "15px",
-          borderRadius: "5px",
-        }}
-      >
-        <h2>Add New User</h2>
-        <div style={{ display: "flex", gap: "10px", flexDirection: "column" }}>
-          <input
-            type="text"
-            placeholder="Name"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            style={{ padding: "5px", fontSize: "14px" }}
-          />
-          <input
-            type="email"
-            placeholder="Email"
-            value={newEmail}
-            onChange={(e) => setNewEmail(e.target.value)}
-            style={{ padding: "5px", fontSize: "14px" }}
-          />
-          <input
-            type="number"
-            placeholder="Age"
-            value={newAge}
-            onChange={(e) => setNewAge(e.target.value)}
-            style={{ padding: "5px", fontSize: "14px" }}
-          />
-          <button
-            onClick={handleAddUser}
-            style={{
-              padding: "10px",
-              backgroundColor: "#4CAF50",
-              color: "white",
-              border: "none",
-              cursor: "pointer",
-              fontSize: "14px",
-            }}
-          >
-            Add User
-          </button>
-        </div>
-      </div>
-
-      {/* Users List */}
-      <div
-        style={{
-          border: "2px solid #333",
-          padding: "15px",
-          borderRadius: "5px",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <h2>Users ({users.length})</h2>
-          <button
-            onClick={handleRefresh}
-            style={{
-              padding: "5px 10px",
-              cursor: "pointer",
-            }}
-          >
-            Refresh
-          </button>
-        </div>
-        {users.length === 0 ? (
-          <p>No users found. Click refresh or add a new user.</p>
-        ) : (
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              marginTop: "10px",
-            }}
-          >
-            <thead>
-              <tr style={{ backgroundColor: "#f0f0f0" }}>
-                <th style={{ padding: "8px", border: "1px solid #ddd" }}>ID</th>
-                <th style={{ padding: "8px", border: "1px solid #ddd" }}>
-                  Name
-                </th>
-                <th style={{ padding: "8px", border: "1px solid #ddd" }}>
-                  Email
-                </th>
-                <th style={{ padding: "8px", border: "1px solid #ddd" }}>
-                  Age
-                </th>
-                <th style={{ padding: "8px", border: "1px solid #ddd" }}>
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((user) => (
-                <tr key={user.id}>
-                  <td style={{ padding: "8px", border: "1px solid #ddd" }}>
-                    {user.id}
-                  </td>
-                  <td style={{ padding: "8px", border: "1px solid #ddd" }}>
-                    {user.name}
-                  </td>
-                  <td style={{ padding: "8px", border: "1px solid #ddd" }}>
-                    {user.email}
-                  </td>
-                  <td style={{ padding: "8px", border: "1px solid #ddd" }}>
-                    {user.age}
-                  </td>
-                  <td
-                    style={{
-                      padding: "8px",
-                      border: "1px solid #ddd",
-                      display: "flex",
-                      gap: "5px",
-                    }}
-                  >
-                    <button
-                      onClick={() => handleUpdateUser(user.id)}
-                      style={{
-                        padding: "5px 10px",
-                        backgroundColor: "#2196F3",
-                        color: "white",
-                        border: "none",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => handleDeleteUser(user.id)}
-                      style={{
-                        padding: "5px 10px",
-                        backgroundColor: "#f44336",
-                        color: "white",
-                        border: "none",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* Logs */}
-      <div
-        style={{
-          border: "2px solid #333",
-          padding: "15px",
-          borderRadius: "5px",
-        }}
-      >
-        <h2>Console Logs</h2>
-        <div
-          style={{
-            maxHeight: "300px",
-            overflow: "auto",
-            backgroundColor: "#f5f5f5",
-            padding: "10px",
-          }}
-        >
-          {logs.map((log, index) => (
-            <div
-              key={index}
-              className={log.cssClass}
-              style={{
-                color:
-                  log.cssClass === "warning" || log.cssClass === "error"
-                    ? "red"
-                    : "inherit",
-                backgroundColor:
-                  log.cssClass === "error" ? "yellow" : "inherit",
-                marginBottom: "5px",
-              }}
-            >
-              {log.message}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
+	return (
+		<QueryClientProvider client={queryClient}>
+			<UserManager />
+		</QueryClientProvider>
+	);
 }
 
 export default App;

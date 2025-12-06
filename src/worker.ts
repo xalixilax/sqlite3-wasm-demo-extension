@@ -1,221 +1,59 @@
-// worker.ts
 import { PGlite } from "@electric-sql/pglite";
 import { OpfsAhpFS } from "@electric-sql/pglite/opfs-ahp";
-import { drizzle } from 'drizzle-orm/pglite';
-import { eq } from 'drizzle-orm';
-import { users } from './db/schema';
+import { drizzle } from "drizzle-orm/pglite";
+import { users } from "./db/schema";
+import { createWorkerHandler, type WorkerRequest } from "./lib/router";
+import { createAppRouter } from "./lib/workerRoutes";
+import { error, log } from "./lib/workerUtils";
 
-// Message types
-interface LogMessage {
-  type: 'log';
-  payload: {
-    cssClass: string;
-    args: string[];
-  };
-}
+let isDbReady = false;
+let handleRequest: ReturnType<typeof createWorkerHandler> | null = null;
 
-interface AddUserMessage {
-  type: 'addUser';
-  payload: {
-    name: string;
-    email: string;
-    age: number;
-  };
-}
+(async () => {
+	const fs = new OpfsAhpFS("my-pgdata");
+	const client = new PGlite({ fs });
+	await client.waitReady;
 
-interface DeleteUserMessage {
-  type: 'deleteUser';
-  payload: {
-    id: number;
-  };
-}
+	const db = drizzle(client, { schema: { users } });
+	const router = createAppRouter({ db, log, error });
+	handleRequest = createWorkerHandler(router);
 
-interface UpdateUserMessage {
-  type: 'updateUser';
-  payload: {
-    id: number;
-    name?: string;
-    email?: string;
-    age?: number;
-  };
-}
+	await db.execute(`
+		CREATE TABLE IF NOT EXISTS users (
+			id SERIAL PRIMARY KEY,
+			name TEXT NOT NULL,
+			email TEXT NOT NULL,
+			age INTEGER NOT NULL
+		);
+	`);
 
-interface GetUsersMessage {
-  type: 'getUsers';
-}
+	const allUsers = await db.select().from(users);
+	if (allUsers.length === 0) {
+		await db.insert(users).values({
+			name: "John Doe",
+			email: "john@example.com",
+			age: 30,
+		});
+	}
 
-interface CloseDbMessage {
-  type: 'closeDb';
-}
+	isDbReady = true;
+	log("Database ready");
+})().catch((err) => error("Init failed:", err.message));
 
-interface QueryResultMessage {
-  type: 'queryResult';
-  payload: {
-    users: Array<{
-      id: number;
-      name: string;
-      email: string;
-      age: number;
-    }>;
-  };
-}
+self.addEventListener("message", async (event: MessageEvent) => {
+	if (!event.data.route) return;
 
-type WorkerMessage = AddUserMessage | DeleteUserMessage | UpdateUserMessage | GetUsersMessage | CloseDbMessage;
+	const request = event.data as WorkerRequest;
 
-const logHtml = function (cssClass: string, ...args: string[]): void {
-  postMessage({
-    type: 'log',
-    payload: { cssClass, args },
-  } as LogMessage);
-};
+	if (!isDbReady || !handleRequest) {
+		postMessage({
+			id: request.id,
+			success: false,
+			error: "Database not ready",
+		});
+		return;
+	}
 
-const log = (...args: string[]): void => logHtml('', ...args);
-const error = (...args: string[]): void => logHtml('error', ...args);
-
-const fs = new OpfsAhpFS("my-pgdata");  // directory inside OPFS
-const client = new PGlite({ fs });
-const db = drizzle(client, { schema: { users } });
-
-async function initDb() {
-  // Provide an OPFS-based directory for persistence
-  log("Initializing database...");
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      name TEXT,
-      email TEXT,
-      age INT
-    );
-  `);
-
-  const allUsers = await db.select().from(users);
-  // Send results back to main thread or do something with them
-  log("Users", JSON.stringify(allUsers));
-}
-
-// Database operation functions
-const addUser = async (name: string, email: string, age: number): Promise<void> => {
-  if (!db) {
-    error('Database not initialized');
-    return;
-  }
-
-  try {
-    await db.insert(users).values({ name, email, age });
-    log(`Added user: ${name}`);
-    getUsers();   
-  } catch (e) {
-    error('Error adding user:', (e as Error).message);
-  }
-};
-
-const deleteUser = async (id: number): Promise<void> => {
-  if (!db) {
-    error('Database not initialized');
-    return;
-  }
-  
-  try {
-    await db.delete(users).where(eq(users.id, id));
-    log(`Deleted user with ID: ${id}`);
-    getUsers();
-  } catch (e) {
-    error('Error deleting user:', (e as Error).message);
-  }
-};
-
-const updateUser = async (id: number, name?: string, email?: string, age?: number): Promise<void> => {
-  if (!db) {
-    error('Database not initialized');
-    return;
-  }
-  
-  try {
-    const updateData: Partial<{ name: string; email: string; age: number }> = {};
-    
-    if (name !== undefined) {
-      updateData.name = name;
-    }
-    if (email !== undefined) {
-      updateData.email = email;
-    }
-    if (age !== undefined) {
-      updateData.age = age;
-    }
-    
-    if (Object.keys(updateData).length === 0) {
-      error('No fields to update');
-      return;
-    }
-    
-    await db.update(users).set(updateData).where(eq(users.id, id));
-    log(`Updated user with ID: ${id}`);
-    getUsers();
-  } catch (e) {
-    error('Error updating user:', (e as Error).message);
-  }
-};
-const getUsers = async (): Promise<void> => {
-  if (!db) {
-    error('Database not initialized');
-    return;
-  }
-  
-  try {
-    const allUsers = await db.select().from(users).orderBy(users.id);
-    
-    postMessage({
-      type: 'queryResult',
-      payload: { users: allUsers },
-    } as QueryResultMessage);
-    
-    log(`Retrieved ${allUsers.length} users`);
-  } catch (e) {
-    error('Error getting users:', (e as Error).message);
-  }
-};
-
-const cleanup = async (): Promise<void> => {
-  if (client) {
-    try {
-      await client.close();
-      log('Database closed successfully');
-    } catch (e) {
-      error('Error closing database:', (e as Error).message);
-    }
-  }
-};
-
-initDb().catch(err => {
-  error("Error initialising DB",err.message);
+	const response = await handleRequest(request);
+	postMessage(response);
 });
-
-// Handle messages from the App
-self.addEventListener('message', (event: MessageEvent) => {
-  const message = event.data as WorkerMessage;
-  
-  log(`Received command: ${message.type}`);
-  
-  switch (message.type) {
-    case 'addUser':
-      addUser(message.payload.name, message.payload.email, message.payload.age);
-      break;
-    case 'deleteUser':
-      deleteUser(message.payload.id);
-      break;
-    case 'updateUser':
-      updateUser(message.payload.id, message.payload.name, message.payload.email, message.payload.age);
-      break;
-    case 'getUsers':
-      getUsers();
-      break;
-    case 'closeDb':
-      cleanup();
-      break;
-    default:
-      const exhaustiveCheck: never = message;
-      throw new Error(`Unhandled case: ${exhaustiveCheck}`);
-  }
-});
-
-log('Loading and initializing PGLite module...');
